@@ -1,60 +1,105 @@
 import logging
 import html
-import os
+import time
 from collections import deque
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, filters
 )
-from dotenv import load_dotenv
-
-# Загружаем переменные из .env
-load_dotenv()
 
 # --- 1. НАСТРОЙКИ ---
-TOKEN = os.getenv('BOT_TOKEN') 
+TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k" 
 ADMIN_ID = 1615492914
+TEST_MODE = False  # ТЕПЕРЬ ОТКЛЮЧЕНО - РАБОТАЕТ В РЕАЛЬНЫЕ КАНАЛЫ
 
 CHANNELS_CONFIG = {
     "bishkek": {
-        "name": "Бишкек Подарки", "channel_id": -1003898037632,
-        "categories": {
-            "flowers": ("🌸 Цветы", 11), "jewelry": ("💎 Ювелирка", 12),
-            "gifts": ("🎁 Подарки", 13), "certs": ("🎟 Сертификаты", 14)
-        }
+        "name": "Бишкек", 
+        "channel_id": -1003898037632, 
+        "categories": {"flowers": 11, "jewelry": 12, "gifts": 13, "certs": 14}
     },
     "osh": {
-        "name": "Ош Подарки", "channel_id": -1003840234187,
-        "categories": {
-            "flowers": ("🌸 Цветы", 4), "jewelry": ("💎 Ювелирка", 6),
-            "gifts": ("🎁 Подарки", 5), "certs": ("🎟 Сертификаты", 30)
-        }
+        "name": "Ош", 
+        "channel_id": -1003840234187, 
+        "categories": {"flowers": 4, "jewelry": 6, "gifts": 5, "certs": 30}
     },
     "jalalabad": {
-        "name": "Джалал-Абад Подарки", "channel_id": -1003764029224,
-        "categories": {
-            "flowers": ("🌸 Цветы", 4), "gifts": ("🎁 Подарки", 5),
-            "jewelry": ("💎 Ювелирка", 6), "certs": ("🎟 Сертификаты", 7)
-        }
+        "name": "Джалал-Абад", 
+        "channel_id": -1003764029224, 
+        "categories": {"flowers": 4, "jewelry": 6, "gifts": 5, "certs": 7}
+    },
+}
+EXTRA_FLOWERS_CHANNEL = -1002930228617 # Bishkek Flowers (ПЕРЕПРОДАЖА)
+
+STRINGS = {
+    'ru': {
+        'welcome': "🇰🇬 <b>КЫРГЫЗСТАН ПОДАРКИ</b>\n━━━━━━━━━━━━━━━\nВыберите действие:",
+        'btn_post': "🌹 Выложить объявление",
+        'btn_support': "💬 Поддержка",
+        'btn_back': "🔙 Назад",
+        'btn_cancel': "❌ Отмена",
+        'btn_done': "✅ ФОТО ЗАГРУЖЕНЫ",
+        'btn_finish_chat': "🏁 ЗАВЕРШИТЬ ЧАТ",
+        'step_1': "<b>📸 ШАГ 1: ФОТО</b>\nОтправьте до 10 фото, затем нажмите 👇",
+        'step_2': "<b>📍 ШАГ 2: ГОРОД</b>",
+        'step_3': "<b>🏠 ШАГ 3: АДРЕС</b>\nВведите адрес магазина или района:",
+        'step_4': "<b>📁 ШАГ 4: КАТЕГОРИЯ</b>",
+        'step_5': "<b>📝 ШАГ 5: НАЗВАНИЕ</b>\nЧто именно вы продаете?",
+        'step_6': "<b>🕒 ШАГ 6: ВРЕМЯ</b>\nУкажите время работы или доставки:",
+        'step_7': "<b>💰 ШАГ 7: ЦЕНА</b>\nВведите цену в сомах:",
+        'step_8': "<b>📱 ШАГ 8: WHATSAPP</b>\nВведите номер телефона:",
+        'wait': "✅ <b>Принято!</b> Ваша заявка отправлена модератору.",
+        'rejected': "❌ <b>Заявка отклонена.</b>",
+        'reason_prefix': "📝 <b>Причина:</b> ",
+        'support_open': "🤝 <b>ЧАТ ОТКРЫТ</b>\nПишите сообщение. Модератор ответит здесь.",
+        'chat_finished': "🏁 Чат завершен.",
+        'edit_menu': "⚙️ <b>ЧТО ИЗМЕНИТЬ?</b>",
+        'field_flowers': "📝 Название",
+        'field_price': "💰 Цена",
+        'field_address': "📍 Адрес",
+        'field_whatsapp': "📞 WhatsApp",
+        'cats': {"flowers": "Цветы 🌸", "jewelry": "Ювелирка 💎", "gifts": "Подарки 🎁", "certs": "Сертификаты 🎟"}
+    },
+    'kg': {
+        'welcome': "🇰🇬 <b>КЫРГЫЗСТАН БЕЛЕКТЕР</b>\n━━━━━━━━━━━━━━━\nАракетти тандаңыз:",
+        'btn_post': "🌹 Жарыя кошуу",
+        'btn_support': "💬 Жардам",
+        'btn_back': "🔙 Артка",
+        'btn_cancel': "❌ Токтотуу",
+        'btn_done': "✅ СҮРӨТТӨР ЖҮКТӨЛДҮ",
+        'btn_finish_chat': "🏁 ЧАТТЫ БҮТҮРҮҮ",
+        'step_1': "<b>📸 1-КАДАМ: СҮРӨТ</b>\nСүрөт жөнөтүп, 👇 басыңыз",
+        'step_2': "<b>📍 2-КАДАМ: ШААР</b>",
+        'step_3': "<b>🏠 3-КАДАМ: ДАРЕК</b>\nДаректи жазыңыз:",
+        'step_4': "<b>📁 4-КАДАМ: КАТЕГОРИЯ</b>",
+        'step_5': "<b>📝 5-КАДАМ: АТАЛЫШЫ</b>\nЭмне сатасыз?",
+        'step_6': "<b>🕒 6-КАДАМ: УБАКЫТ</b>\nУбакытты жазыңыз:",
+        'step_7': "<b>💰 7-КАДАМ: БААСЫ</b>\nБаасын жазыңыз:",
+        'step_8': "<b>📱 8-КАДАМ: WHATSAPP</b>\nТелефон номериңиз:",
+        'wait': "✅ <b>Кабыл алынды!</b> Текшерүүгө жөнөтүлдү.",
+        'rejected': "❌ <b>Жарыя четке кагылды.</b>",
+        'reason_prefix': "📝 <b>Себеби:</b> ",
+        'support_open': "🤝 <b>ЧАТ АЧЫЛДЫ</b>\nЖазыңыз, модератор жооп берет.",
+        'chat_finished': "🏁 Чат аяктады.",
+        'edit_menu': "⚙️ <b>ЭМНЕНИ ӨЗГӨРТҮҮ КЕРЕК?</b>",
+        'field_flowers': "📝 Аталышы",
+        'field_price': "💰 Баасы",
+        'field_address': "📍 Дарек",
+        'field_whatsapp': "📞 WhatsApp",
+        'cats': {"flowers": "Гүлдөр 🌸", "jewelry": "Зергер буюмдар 💎", "gifts": "Белектер 🎁", "certs": "Сертификаттар 🎟"}
     }
 }
 
-# Состояния анкеты
-CITY, ADDRESS, PHOTO, CATEGORY, FLOWERS, DATE, PRICE, WHATSAPP = range(8)
-# Состояния редактирования
-EDIT_CHOOSE_FIELD, EDIT_INPUT_VALUE = range(8, 10)
+db_ads, db_users = {}, {}
+active_support_chat = None 
+support_queue = deque()
+
+PHOTO, CITY, ADDRESS, CATEGORY, FLOWERS, DATE, PRICE, WHATSAPP = range(8)
 
 logging.basicConfig(level=logging.INFO)
 
-db = {} 
-active_support_chat = None 
-support_queue = deque()    
-
-# Команды только для главного меню и саппорта
-FOOTER_CMD = "\n\n━━━━━━━━━━━━━━━\n🌹 /post | 💬 /support "
-
-# --- УТИЛИТЫ ДИЗАЙНА ---
+# --- УТИЛИТЫ ---
 
 def format_caption(data, is_sold=False):
     f = html.escape(str(data.get('flowers', '—')))
@@ -62,333 +107,383 @@ def format_caption(data, is_sold=False):
     d = html.escape(str(data.get('date', '—')))
     a = html.escape(str(data.get('address', '—')))
     w = html.escape(str(data.get('whatsapp', '—')))
-
     if is_sold:
-        return (
-            f"<b>✅ СТАТУС: ПРОДАНО / НЕАКТУАЛЬНО</b>\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"📦 <b>ТОВАР:</b> {f}\n"
-            f"💰 <b>БЫЛА ЦЕНА:</b> {p}\n"
-            f"━━━━━━━━━━━━━━━\n"
-            f"<i>Объявление закрыто владельцем через @kyrgyzstanpodarkibot</i>"
-        )
-    
-    return (
-        f"🏷 <b>ТОВАР:</b> {f}\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"💰 <b>ЦЕНА:</b> {p}\n"
-        f"🕒 <b>ВРЕМЯ:</b> {d}\n"
-        f"📍 <b>АДРЕС:</b> {a}\n"
-        f"📞 <b>СВЯЗЬ:</b> {w}\n"
-        f"━━━━━━━━━━━━━━━\n"
-        f"🤖 <b>Разместить объявление:</b> @kyrgyzstanpodarkibot"
-    )
+        return f"<b>✅ ПРОДАНО / САТЫЛДЫ</b>\n━━━━━━━━━━━━━━━\n📦 <b>ТОВАР:</b> {f}\n💰 <b>ЦЕНА:</b> {p}"
+    return f"🏷 <b>ТОВАР:</b> {f}\n━━━━━━━━━━━━━━━\n💰 <b>ЦЕНА:</b> {p}\n🕒 <b>ВРЕМЯ:</b> {d}\n📍 <b>АДРЕС:</b> {a}\n📞 <b>СВЯЗЬ:</b> {w}\n━━━━━━━━━━━━━━━\n🤖 @kyrgyzstanpodarkibot"
 
-def get_control_keyboard(u_id):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 ИЗМЕНИТЬ ДАННЫЕ", callback_data=f"usr_edit_{u_id}")],
-        [InlineKeyboardButton("✅ ТОВАР ПРОДАН", callback_data=f"usr_sold_{u_id}")]
-    ])
+async def clear_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if 'last_msg' in context.user_data:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, context.user_data['last_msg'])
+        except:
+            pass
 
-# --- ОБРАБОТЧИКИ ---
+# --- ГЛАВНЫЕ КОМАНДЫ ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    welcome_text = (
-        "🇰🇬 <b>ВАС ПРИВЕТСТВУЕТ СЕРВИС «КЫРГЫЗСТАН ПОДАРКИ»!</b>\n\n"
-        "Мы создали единую площадку для перепродажи букетов, ювелирных изделий и подарочных сертификатов.\n\n"
-        "✨ <b>Наши возможности:</b>\n"
-        "• Публикация в крупнейших региональных каналах страны.\n"
-        "• Удобное управление вашим объявлением.\n"
-        "• Живой чат с модератором для помощи.\n\n"
-        "🚀 <b>МЕНЮ:</b>\n"
-        "🌹 /post — Разместить объявление\n"
-        "💬 /support — Написать в поддержку\n\n"
-        "<i>Нажмите /post, чтобы начать создание вашей карточки товара!</i>"
-    )
-    await update.message.reply_text(welcome_text, parse_mode='HTML', reply_markup=ReplyKeyboardRemove())
+    u_id = update.effective_user.id
+    context.user_data.clear()
+    
+    if u_id not in db_users:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("Русский 🇷🇺", callback_data="sl_ru"), 
+                                    InlineKeyboardButton("Кыргызча 🇰🇬", callback_data="sl_kg")]])
+        if update.message:
+            await update.message.reply_text("Выберите язык / Тилди тандаңыз:", reply_markup=kb)
+        else:
+            await update.callback_query.message.edit_text("Выберите язык / Тилди тандаңыз:", reply_markup=kb)
+        return ConversationHandler.END
 
-# --- СОЗДАНИЕ ПОСТА (/post) ---
+    lang = db_users[u_id]
+    s = STRINGS[lang]
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(s['btn_post'], callback_data="main_post")], 
+                               [InlineKeyboardButton(s['btn_support'], callback_data="main_support")]])
+    if update.callback_query:
+        await update.callback_query.message.edit_text(s['welcome'], reply_markup=kb, parse_mode='HTML')
+    else:
+        msg = await update.message.reply_text(s['welcome'], reply_markup=kb, parse_mode='HTML')
+        context.user_data['last_msg'] = msg.message_id
+    return ConversationHandler.END
+
+async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    await update.message.reply_text(f"📊 Юзеров: {len(db_users)}\nЗаявок: {len(db_ads)}\nЧат-очередь: {len(support_queue)}")
+
+async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    db_users[query.from_user.id] = query.data.split("_")[1]
+    await query.answer()
+    return await start(update, context)
+
+# --- АНКЕТА ---
 
 async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    if query: await query.answer()
+    lang = db_users.get(update.effective_user.id, 'ru')
+    context.user_data['photos'] = []
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_done'], callback_data="photos_done")],
+                               [InlineKeyboardButton(STRINGS[lang]['btn_cancel'], callback_data="to_main")]])
+    
+    if query:
+        await query.message.edit_text(STRINGS[lang]['step_1'], reply_markup=kb, parse_mode='HTML')
+        context.user_data['last_msg'] = query.message.message_id
+    return PHOTO
+
+async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        context.user_data['photos'].append(update.message.photo[-1].file_id)
+    return PHOTO
+
+async def post_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lang = db_users.get(update.effective_user.id, 'ru')
+    if not context.user_data.get('photos'):
+        await update.callback_query.answer("Загрузите фото!", show_alert=True)
+        return PHOTO
+    
+    await clear_ui(update, context)
     kb = [[InlineKeyboardButton(v['name'], callback_data=f"city_{k}")] for k, v in CHANNELS_CONFIG.items()]
-    text = (
-        "<b>📍 ШАГ 1 из 8: ВЫБОР РЕГИОНА</b>\n\n"
-        "Пожалуйста, выберите город. Ваше объявление будет опубликовано именно в канале выбранного города."
-    )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    kb.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_photo_start")])
+    msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_2'], reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return CITY
 
 async def post_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    lang = db_users.get(query.from_user.id, 'ru')
+    if query.data.startswith("city_"):
+        context.user_data['city_key'] = query.data.replace("city_", "")
     await query.answer()
-    context.user_data['city_key'] = query.data.replace("city_", "")
-    text = (
-        "<b>🏠 ШАГ 2 из 8: ВАШ АДРЕС</b>\n\n"
-        "Пожалуйста, напишите адрес или ориентир (район, ТЦ, пересечение улиц), где находится товар.\n\n"
-        "<i>Пример: 7-й микрорайон, ТЦ Ала-Арча или Ахунбаева/Байтик-Баатыра.</i>"
-    )
-    await query.edit_message_text(text, parse_mode='HTML')
+    
+    await clear_ui(update, context)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="photos_done")]])
+    msg = await query.message.reply_text(STRINGS[lang]['step_3'], reply_markup=kb, parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return ADDRESS
 
 async def post_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['address'] = update.message.text
-    text = (
-        "<b>📸 ШАГ 3 из 8: ФОТОГРАФИЯ ТОВАРА</b>\n\n"
-        "Пожалуйста, отправьте <b>одну качественную фотографию</b> вашего товара.\n\n"
-        "💡 <i>Совет: Четкое фото при хорошем освещении значительно повышает шансы на быструю продажу!</i>"
-    )
-    await update.message.reply_text(text, parse_mode='HTML')
-    return PHOTO
-
-async def post_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text("⚠️ <b>ОШИБКА:</b> Пожалуйста, отправьте фото как изображение (не документ).")
-        return PHOTO
-    context.user_data['photo'] = update.message.photo[-1].file_id
-    city = context.user_data['city_key']
-    kb = [[InlineKeyboardButton(n, callback_data=f"cat_{k}")] for k, (n, tid) in CHANNELS_CONFIG[city]['categories'].items()]
-    text = (
-        "<b>📁 ШАГ 4 из 8: КАТЕГОРИЯ</b>\n\n"
-        "Выберите категорию вашего товара. Это необходимо для сортировки во вкладках канала."
-    )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    if update.message:
+        context.user_data['address'] = update.message.text
+        await clear_ui(update, context)
+    
+    lang = db_users.get(update.effective_user.id, 'ru')
+    kb = [[InlineKeyboardButton(v, callback_data=f"cat_{k}")] for k, v in STRINGS[lang]['cats'].items()]
+    kb.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_city")])
+    msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_4'], reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return CATEGORY
 
 async def post_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    lang = db_users.get(query.from_user.id, 'ru')
+    if query.data.startswith("cat_"):
+        context.user_data['cat_key'] = query.data.replace("cat_", "")
     await query.answer()
-    context.user_data['cat_key'] = query.data.replace("cat_", "")
-    text = (
-        "<b>📝 ШАГ 5 из 8: НАЗВАНИЕ</b>\n\n"
-        "Кратко опишите ваш товар.\n\n"
-        "📖 <b>Пример:</b> <i>Букет из 25 роз «Ред Наоми»</i> или <i>Золотые серьги 585 пробы.</i>"
-    )
-    await query.edit_message_text(text, parse_mode='HTML')
+    
+    await clear_ui(update, context)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_addr")]])
+    msg = await query.message.reply_text(STRINGS[lang]['step_5'], reply_markup=kb, parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return FLOWERS
 
 async def post_flowers(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['flowers'] = update.message.text
-    text = (
-        "<b>🕒 ШАГ 6 из 8: ВРЕМЯ И СВЕЖЕСТЬ</b>\n\n"
-        "Укажите, когда был куплен или получен товар. Это важно для покупателей.\n\n"
-        "📖 <b>Пример:</b> <i>Сегодня утром</i> или <i>Вчера в 19:00.</i>"
-    )
-    await update.message.reply_text(text, parse_mode='HTML')
+    if update.message:
+        context.user_data['flowers'] = update.message.text
+        await clear_ui(update, context)
+    
+    lang = db_users.get(update.effective_user.id, 'ru')
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_cat")]])
+    msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_6'], reply_markup=kb, parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return DATE
 
 async def post_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['date'] = update.message.text
-    text = (
-        "<b>💰 ШАГ 7 из 8: СТОИМОСТЬ</b>\n\n"
-        "Укажите цену в сомах. Если готовы торговаться, можете дописать «торг уместен».\n\n"
-        "📖 <b>Пример:</b> <i>2500 сом</i>"
-    )
-    await update.message.reply_text(text, parse_mode='HTML')
+    if update.message:
+        context.user_data['date'] = update.message.text
+        await clear_ui(update, context)
+        
+    lang = db_users.get(update.effective_user.id, 'ru')
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_flowers")]])
+    msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_7'], reply_markup=kb, parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return PRICE
 
 async def post_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['price'] = update.message.text
-    text = (
-        "<b>📱 ШАГ 8 из 8: КОНТАКТЫ</b>\n\n"
-        "Введите ваш действующий номер WhatsApp для связи покупателей с вами.\n\n"
-        "📖 <b>Пример:</b> <i>+996 700 12 34 56</i>"
-    )
-    await update.message.reply_text(text, parse_mode='HTML')
+    if update.message:
+        context.user_data['price'] = update.message.text
+        await clear_ui(update, context)
+        
+    lang = db_users.get(update.effective_user.id, 'ru')
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_date")]])
+    msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_8'], reply_markup=kb, parse_mode='HTML')
+    context.user_data['last_msg'] = msg.message_id
     return WHATSAPP
 
 async def post_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    u_id = update.effective_user.id
     context.user_data['whatsapp'] = update.message.text
-    city_key = context.user_data['city_key']
+    u_id = update.effective_user.id
+    lang = db_users.get(u_id, 'ru')
+    ad_id = str(int(time.time()))
     
-    db[u_id] = {
-        'flowers': context.user_data['flowers'], 'price': context.user_data['price'],
-        'date': context.user_data['date'], 'whatsapp': context.user_data['whatsapp'],
-        'address': context.user_data['address'], 'city_key': city_key, 
-        'cat_key': context.user_data['cat_key'], 'photo': context.user_data['photo']
+    db_ads[ad_id] = {
+        'user_id': u_id, 'city_key': context.user_data['city_key'], 'cat_key': context.user_data['cat_key'],
+        'flowers': context.user_data['flowers'], 'price': context.user_data['price'], 'date': context.user_data['date'],
+        'address': context.user_data['address'], 'whatsapp': context.user_data['whatsapp'], 'photos': context.user_data['photos']
     }
     
-    caption = format_caption(db[u_id])
-    kb = [[InlineKeyboardButton("ОДОБРИТЬ ✅", callback_data=f"adm_pub_{u_id}"), 
-           InlineKeyboardButton("ОТКЛОНИТЬ ❌", callback_data=f"adm_rej_{u_id}")]]
+    await clear_ui(update, context)
     
-    await context.bot.send_photo(
-        ADMIN_ID, context.user_data['photo'], 
-        caption=f"📑 <b>НОВАЯ ЗАЯВКА НА ПРОВЕРКУ</b>\n\n{caption}\n👤 От: @{update.effective_user.username}", 
-        reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML'
-    )
+    # Модерация (Админу)
+    ad = db_ads[ad_id]
+    adm_cap = f"📑 <b>ЗАЯВКА</b>\n👤 @{update.effective_user.username}\n📍 {CHANNELS_CONFIG[ad['city_key']]['name']} | {STRINGS['ru']['cats'][ad['cat_key']]}\n\n{format_caption(ad)}"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ОДОБРИТЬ ✅", callback_data=f"apub_{ad_id}"), InlineKeyboardButton("ОТКЛОНИТЬ ❌", callback_data=f"arej_{ad_id}")],
+        [InlineKeyboardButton("⚙️ КАТЕГОРИЯ", callback_data=f"achg_{ad_id}")]
+    ])
+    await context.bot.send_photo(ADMIN_ID, ad['photos'][0], caption=adm_cap, reply_markup=kb, parse_mode='HTML')
     
-    await update.message.reply_text(
-        "✅ <b>ВАША ЗАЯВКА ПРИНЯТА!</b>\n\n"
-        "Объявление отправлено модератору на проверку. Мы пришлем вам уведомление о публикации."
-        + FOOTER_CMD, parse_mode='HTML'
-    )
+    await update.message.reply_text(STRINGS[lang]['wait'], parse_mode='HTML')
     return ConversationHandler.END
+
+# --- АДМИН ---
+
+async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data.split("_")
+    action, ad_id = data[0], data[1]
+    ad = db_ads.get(ad_id)
+    if not ad: return
+
+    if action == "apub":
+        await query.answer()
+        target = ADMIN_ID if TEST_MODE else CHANNELS_CONFIG[ad['city_key']]['channel_id']
+        thread = CHANNELS_CONFIG[ad['city_key']]['categories'][ad['cat_key']] if not TEST_MODE else None
+        cap = format_caption(ad)
+        
+        try:
+            # 1. Основной канал
+            if len(ad['photos']) == 1:
+                msg = await context.bot.send_photo(target, ad['photos'][0], caption=cap, parse_mode='HTML', message_thread_id=thread)
+            else:
+                media = [InputMediaPhoto(ad['photos'][0], caption=cap, parse_mode='HTML')]
+                for ph in ad['photos'][1:10]: media.append(InputMediaPhoto(ph))
+                msgs = await context.bot.send_media_group(target, media, message_thread_id=thread)
+                msg = msgs[0]
+            db_ads[ad_id].update({'m_id': msg.message_id, 'c_id': target})
+
+            # 2. Доп канал (Цветы Бишкек)
+            if ad['city_key'] == "bishkek" and ad['cat_key'] == "flowers":
+                ex_target = ADMIN_ID if TEST_MODE else EXTRA_FLOWERS_CHANNEL
+                try:
+                    if len(ad['photos']) == 1:
+                        ex_msg = await context.bot.send_photo(ex_target, ad['photos'][0], caption=cap, parse_mode='HTML')
+                    else:
+                        media_ex = [InputMediaPhoto(ad['photos'][0], caption=cap, parse_mode='HTML')]
+                        for ph in ad['photos'][1:10]: media_ex.append(InputMediaPhoto(ph))
+                        ex_msgs = await context.bot.send_media_group(ex_target, media_ex)
+                        ex_msg = ex_msgs[0]
+                    db_ads[ad_id]['ex_m_id'], db_ads[ad_id]['ex_c_id'] = ex_msg.message_id, ex_target
+                except: pass
+
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📝 Изменить", callback_data=f"uedit_{ad_id}"), InlineKeyboardButton("✅ Продано", callback_data=f"usold_{ad_id}")]])
+            await context.bot.send_message(ad['user_id'], "🎉 Ваше объявление опубликовано!", reply_markup=kb)
+            await query.message.delete()
+        except Exception as e:
+            await query.message.reply_text(f"Ошибка публикации: {e}")
+
+    elif action == "arej":
+        await query.answer()
+        u_id = ad['user_id']
+        lang = db_users.get(u_id, 'ru')
+        # Сразу уведомляем
+        await context.bot.send_message(u_id, STRINGS[lang]['rejected'], parse_mode='HTML')
+        context.bot_data['wait_rej'] = u_id
+        await query.message.delete()
+        await context.bot.send_message(ADMIN_ID, f"❌ Отклонено {ad_id}. Напишите причину:")
+
+    elif action == "achg":
+        await query.answer()
+        kb = [[InlineKeyboardButton(v, callback_data=f"asetcat_{ad_id}_{k}")] for k, v in STRINGS['ru']['cats'].items()]
+        await query.message.edit_caption(caption="Выберите категорию:", reply_markup=InlineKeyboardMarkup(kb))
+
+async def admin_set_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    _, ad_id, new_cat = query.data.split("_")
+    if ad_id in db_ads:
+        db_ads[ad_id]['cat_key'] = new_cat
+        ad = db_ads[ad_id]
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("ОДОБРИТЬ ✅", callback_data=f"apub_{ad_id}"), InlineKeyboardButton("ОТКЛОНИТЬ ❌", callback_data=f"arej_{ad_id}")], [InlineKeyboardButton("⚙️ КАТЕГОРИЯ", callback_data=f"achg_{ad_id}")]])
+        await query.message.edit_caption(caption=f"Категория изменена!\n\n{format_caption(ad)}", reply_markup=kb, parse_mode='HTML')
 
 # --- ПОДДЕРЖКА ---
 
-async def support_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
     u_id = update.effective_user.id
-    if u_id == ADMIN_ID:
-        status = f"Активен: <code>{active_support_chat}</code>" if active_support_chat else "Активных нет"
-        await update.message.reply_text(f"👨‍💻 <b>АДМИН</b>\n\n{status}\nВ очереди: <b>{len(support_queue)}</b>", parse_mode='HTML')
-        return
-    if active_support_chat == u_id:
-        await update.message.reply_text("🤝 Вы уже в чате с модератором!" + FOOTER_CMD, parse_mode='HTML')
-        return
+    lang = db_users.get(u_id, 'ru')
+    if active_support_chat == u_id: return
+    
+    await update.callback_query.answer()
     if active_support_chat is None:
         active_support_chat = u_id
-        kb = ReplyKeyboardMarkup([['/endsupport']], resize_keyboard=True)
-        await update.message.reply_text(
-            "🤝 <b>ЧАТ С ПОДДЕРЖКОЙ ОТКРЫТ!</b>\n\n"
-            "Пожалуйста, опишите вашу проблему. Модератор ответит вам здесь.\n"
-            "Для выхода нажмите /endsupport", reply_markup=kb, parse_mode='HTML')
-        await context.bot.send_message(ADMIN_ID, f"🆘 <b>ЗАПРОС В SUPPORT:</b> @{update.effective_user.username}")
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_finish_chat'], callback_data="finish_chat")]])
+        await context.bot.send_message(u_id, STRINGS[lang]['support_open'], reply_markup=kb, parse_mode='HTML')
+        await context.bot.send_message(ADMIN_ID, f"🆘 ЧАТ: @{update.effective_user.username}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏁 ЗАВЕРШИТЬ", callback_data="finish_chat")]]))
     else:
         if u_id not in support_queue: support_queue.append(u_id)
-        await update.message.reply_text(f"⏳ <b>МОДЕРАТОР ЗАНЯТ.</b> Ваше место в очереди: <b>{list(support_queue).index(u_id)+1}</b>" + FOOTER_CMD, parse_mode='HTML')
+        await update.callback_query.message.reply_text(f"Вы в очереди: {list(support_queue).index(u_id)+1}")
 
-async def end_support(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
-    u_id = update.effective_user.id
+    await update.callback_query.answer()
     if active_support_chat:
-        target = active_support_chat if u_id == ADMIN_ID else ADMIN_ID
-        try: await context.bot.send_message(target, "🏁 <b>ЧАТ ЗАВЕРШЕН.</b>\nСпасибо за обращение!", reply_markup=ReplyKeyboardRemove(), parse_mode='HTML')
+        try:
+            l = db_users.get(active_support_chat, 'ru')
+            await context.bot.send_message(active_support_chat, STRINGS[l]['chat_finished'])
+            await context.bot.send_message(ADMIN_ID, "🏁 Чат закрыт.")
         except: pass
-    if u_id == ADMIN_ID: await update.message.reply_text(f"🔒 Чат с {active_support_chat} закрыт.")
-    else: await update.message.reply_text("🏁 Чат закрыт." + FOOTER_CMD, reply_markup=ReplyKeyboardRemove(), parse_mode='HTML')
     active_support_chat = None
     if support_queue:
-        next_u = support_queue.popleft()
-        active_support_chat = next_u
-        await context.bot.send_message(next_u, "✨ <b>ВАША ОЧЕРЕДЬ!</b>\nМодератор подключился. Задавайте ваш вопрос.", reply_markup=ReplyKeyboardMarkup([['/endsupport']], resize_keyboard=True), parse_mode='HTML')
-        await context.bot.send_message(ADMIN_ID, f"🔔 Чат открыт с ID <code>{next_u}</code>", parse_mode='HTML')
+        active_support_chat = support_queue.popleft()
+        l = db_users.get(active_support_chat, 'ru')
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[l]['btn_finish_chat'], callback_data="finish_chat")]])
+        await context.bot.send_message(active_support_chat, STRINGS[l]['support_open'], reply_markup=kb, parse_mode='HTML')
+    else:
+        if update.effective_user.id == ADMIN_ID:
+            try: await update.callback_query.message.edit_text("🏁 Все чаты закрыты.")
+            except: pass
 
-async def message_relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global active_support_chat
-    u_id = update.effective_user.id
-    msg = update.message.text
-    if u_id == ADMIN_ID:
-        if context.bot_data.get('wait_rej'):
-            target = context.bot_data['wait_rej']
-            await context.bot.send_message(target, f"💬 <b>ОТВЕТ МОДЕРАТОРА:</b>\n\n{msg}\n\n<i>Вы можете исправить заявку или подать новую через /post</i>", parse_mode='HTML')
-            await update.message.reply_text("✅ Отправлено пользователю.")
-            context.bot_data['wait_rej'] = None
-            return
-        if active_support_chat: await context.bot.send_message(active_support_chat, f"👨‍💻 <b>ОТВЕТ МОДЕРАТОРА:</b>\n\n{msg}" + FOOTER_CMD, parse_mode='HTML')
-    elif u_id == active_support_chat:
-        await context.bot.send_message(ADMIN_ID, f"👤 <b>ОТ @{update.effective_user.username}:</b>\n\n{msg}", parse_mode='HTML')
+# --- ИЗМЕНЕНИЕ ---
 
-# --- РЕДАКТИРОВАНИЕ (ИСПРАВЛЕНО) ---
-
-async def edit_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    u_id = int(query.data.split("_")[2])
-    kb = [
-        [InlineKeyboardButton("💰 ЦЕНУ", callback_data=f"edf_price_{u_id}"), InlineKeyboardButton("🕒 ВРЕМЯ", callback_data=f"edf_date_{u_id}")],
-        [InlineKeyboardButton("🎁 НАЗВАНИЕ", callback_data=f"edf_flowers_{u_id}"), InlineKeyboardButton("🏠 АДРЕС", callback_data=f"edf_address_{u_id}")],
-        [InlineKeyboardButton("⬅️ НАЗАД", callback_data=f"edf_back_{u_id}")]
-    ]
-    await query.edit_message_text("⚙️ <b>ЧТО ИЗМЕНИТЬ?</b>\nВыберите поле для редактирования:", reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
-    return EDIT_CHOOSE_FIELD
-
-async def edit_field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data.split("_")
-    u_id = int(data[2])
-    if data[1] == "back":
-        await query.edit_message_text("⚙️ <b>УПРАВЛЕНИЕ:</b>", reply_markup=get_control_keyboard(u_id), parse_mode='HTML')
-        return ConversationHandler.END
-    context.user_data['edit_f'], context.user_data['edit_id'] = data[1], u_id
-    await query.edit_message_text("📝 <b>ВВЕДИТЕ НОВОЕ ЗНАЧЕНИЕ:</b>", parse_mode='HTML')
-    return EDIT_INPUT_VALUE
-
-async def edit_save(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    val, u_id, field = update.message.text, context.user_data['edit_id'], context.user_data['edit_f']
-    if u_id in db:
-        db[u_id][field] = val
-        p = db[u_id]
-        await context.bot.edit_message_caption(chat_id=p['c_id'], message_id=p['m_id'], caption=format_caption(p), parse_mode='HTML')
-        await update.message.reply_text("✅ <b>ДАННЫЕ ОБНОВЛЕНЫ!</b>", reply_markup=get_control_keyboard(u_id), parse_mode='HTML')
-    return ConversationHandler.END
-
-# --- CALLBACKS ---
-
-async def handle_callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     data = query.data.split("_")
-    await query.answer()
+    action, ad_id = data[0], data[1]
+    ad = db_ads.get(ad_id)
+    if not ad: return
+    lang = db_users.get(update.effective_user.id, 'ru')
 
-    if data[0] == "adm" and data[1] == "pub":
-        u_id = int(data[2])
-        if u_id in db:
-            p = db[u_id]
-            cfg = CHANNELS_CONFIG[p['city_key']]
-            try:
-                # В КАНАЛ УХОДИТ ЧИСТЫЙ ТЕКСТ
-                res = await context.bot.send_photo(
-                    chat_id=cfg['channel_id'], photo=p['photo'], 
-                    caption=format_caption(p), 
-                    message_thread_id=cfg['categories'][p['cat_key']][1], parse_mode='HTML'
-                )
-                db[u_id]['m_id'], db[u_id]['c_id'] = res.message_id, cfg['channel_id']
-                await context.bot.send_message(u_id, "🎉 <b>ВАШЕ ОБЪЯВЛЕНИЕ ОПУБЛИКОВАНО!</b>\nТеперь вы можете управлять им через меню ниже.", reply_markup=get_control_keyboard(u_id), parse_mode='HTML')
-                await query.edit_message_caption(query.message.caption + "\n\n✅ <b>ОПУБЛИКОВАНО</b>", parse_mode='HTML')
-            except Exception as e: await query.message.reply_text(f"❌ Ошибка публикации: {e}")
+    if action == "usold":
+        # Синхронно в двух каналах
+        for m_key, c_key in [('m_id', 'c_id'), ('ex_m_id', 'ex_c_id')]:
+            if m_key in ad:
+                try: await context.bot.edit_message_caption(chat_id=ad[c_key], message_id=ad[m_key], caption=format_caption(ad, True), parse_mode='HTML')
+                except: pass
+        await query.edit_message_text("✅ ТОВАР ПРОДАН")
 
-    elif data[0] == "adm" and data[1] == "rej":
-        u_id = int(data[2])
-        context.bot_data['wait_rej'] = u_id
-        await context.bot.send_message(u_id, "❌ <b>ЗАЯВКА ОТКЛОНЕНА МОДЕРАТОРОМ.</b>\nСейчас вам напишут причину.", parse_mode='HTML')
-        await query.edit_message_caption(query.message.caption + "\n\n❌ <b>ОТКЛОНЕНО</b>", parse_mode='HTML')
-        await context.bot.send_message(ADMIN_ID, "Напишите причину отклонения:")
+    elif action == "uedit":
+        s = STRINGS[lang]
+        kb = [[InlineKeyboardButton(s['field_flowers'], callback_data=f"uf_flowers_{ad_id}"), InlineKeyboardButton(s['field_price'], callback_data=f"uf_price_{ad_id}")],
+              [InlineKeyboardButton(s['field_address'], callback_data=f"uf_address_{ad_id}"), InlineKeyboardButton(s['field_whatsapp'], callback_data=f"uf_whatsapp_{ad_id}")],
+              [InlineKeyboardButton(s['btn_back'], callback_data=f"uback_{ad_id}")]]
+        await query.edit_message_text(s['edit_menu'], reply_markup=InlineKeyboardMarkup(kb), parse_mode='HTML')
 
-    elif data[0] == "usr" and data[1] == "sold":
-        u_id = int(data[2])
-        if u_id in db:
-            p = db[u_id]
-            await context.bot.edit_message_caption(chat_id=p['c_id'], message_id=p['m_id'], caption=format_caption(p, True), parse_mode='HTML')
-            await query.edit_message_text("✅ <b>ТОВАР ОТМЕЧЕН КАК ПРОДАННЫЙ.</b>")
+    elif action == "uback":
+        kb = [[InlineKeyboardButton("📝 Изменить", callback_data=f"uedit_{ad_id}"), InlineKeyboardButton("✅ Продано", callback_data=f"usold_{ad_id}")]]
+        await query.edit_message_text("Меню управления:", reply_markup=InlineKeyboardMarkup(kb))
+
+# --- РЕЛЕЙ ---
+
+async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    u_id, text = update.effective_user.id, update.message.text
+    
+    # 1. Редактирование (Синхронно)
+    if 'edit_field' in context.user_data:
+        field, ad_id = context.user_data['edit_field'], context.user_data['edit_ad_id']
+        if ad_id in db_ads:
+            db_ads[ad_id][field] = text
+            ad = db_ads[ad_id]
+            for m_key, c_key in [('m_id', 'c_id'), ('ex_m_id', 'ex_c_id')]:
+                if m_key in ad:
+                    try: await context.bot.edit_message_caption(chat_id=ad[c_key], message_id=ad[m_key], caption=format_caption(ad), parse_mode='HTML')
+                    except: pass
+            del context.user_data['edit_field']
+            kb = [[InlineKeyboardButton("📝 Изменить еще", callback_data=f"uedit_{ad_id}"), InlineKeyboardButton("✅ Продано", callback_data=f"usold_{ad_id}")]]
+            await update.message.reply_text("✅ Обновлено!", reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # 2. Причина отказа
+    if u_id == ADMIN_ID and context.bot_data.get('wait_rej'):
+        target = context.bot_data['wait_rej']
+        lang = db_users.get(target, 'ru')
+        await context.bot.send_message(target, f"{STRINGS[lang]['reason_prefix']}{text}", parse_mode='HTML')
+        context.bot_data['wait_rej'] = None
+        await update.message.reply_text("Причина отправлена.")
+        return
+
+    # 3. Чат
+    if u_id == ADMIN_ID and active_support_chat: await context.bot.send_message(active_support_chat, f"👨‍💻 {text}")
+    elif u_id == active_support_chat: await context.bot.send_message(ADMIN_ID, f"👤 {text}")
+
+async def field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query; _, field, ad_id = query.data.split("_")
+    context.user_data['edit_field'], context.user_data['edit_ad_id'] = field, ad_id
+    await query.answer(); await query.edit_message_text("✍️ Введите новое значение:")
 
 # --- ЗАПУСК ---
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler('start', start))
+    app.add_handler(CommandHandler('infa', admin_info))
+    app.add_handler(CallbackQueryHandler(set_lang, pattern="^sl_"))
+    app.add_handler(CallbackQueryHandler(admin_decision, pattern="^apub_|^arej_|^achg_"))
+    app.add_handler(CallbackQueryHandler(admin_set_category, pattern="^asetcat_"))
+    app.add_handler(CallbackQueryHandler(user_actions, pattern="^usold_|^uedit_|^uback_"))
+    app.add_handler(CallbackQueryHandler(field_select, pattern="^uf_"))
+    app.add_handler(CallbackQueryHandler(start, pattern="^to_main$"))
     
-    # Регистрация /post (группа 1)
     app.add_handler(ConversationHandler(
-        entry_points=[CommandHandler('post', post_start, filters.ChatType.PRIVATE)],
+        entry_points=[CallbackQueryHandler(post_start, pattern="^main_post$")],
         states={
-            CITY: [CallbackQueryHandler(post_city)], 
-            ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_address)],
-            PHOTO: [MessageHandler(filters.PHOTO, post_photo)], 
-            CATEGORY: [CallbackQueryHandler(post_category)], 
-            FLOWERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_flowers)], 
-            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_date)], 
-            PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_price)], 
-            WHATSAPP: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_whatsapp)],
-        }, 
-        fallbacks=[CommandHandler('start', start)]
-    ), group=1)
-
-    # Регистрация редактирования (группа 2)
-    app.add_handler(ConversationHandler(
-        entry_points=[CallbackQueryHandler(edit_start, pattern="^usr_edit_")],
-        states={ 
-            EDIT_CHOOSE_FIELD: [CallbackQueryHandler(edit_field_select, pattern="^edf_")], 
-            EDIT_INPUT_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, edit_save)] 
-        }, 
-        fallbacks=[CommandHandler('start', start)]
-    ), group=2)
-
-    app.add_handler(CommandHandler('start', start, filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler('support', support_command, filters.ChatType.PRIVATE))
-    app.add_handler(CommandHandler('endsupport', end_support, filters.ChatType.PRIVATE))
-    app.add_handler(CallbackQueryHandler(handle_callbacks))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, message_relay))
-    
-    print("🚀 БОТ ЗАПУЩЕН! ВСЕ ОШИБКИ ИСПРАВЛЕНЫ.")
+            PHOTO: [MessageHandler(filters.PHOTO, post_photo), CallbackQueryHandler(post_photos_done, pattern="^photos_done$")],
+            CITY: [CallbackQueryHandler(post_city, pattern="^city_"), CallbackQueryHandler(post_start, pattern="^back_to_photo_start$")],
+            ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_address), CallbackQueryHandler(post_photos_done, pattern="^back_to_photos$")],
+            CATEGORY: [CallbackQueryHandler(post_category, pattern="^cat_"), CallbackQueryHandler(post_city, pattern="^back_to_city$")],
+            FLOWERS: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_flowers), CallbackQueryHandler(post_category, pattern="^back_to_cat$")],
+            DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_date), CallbackQueryHandler(post_flowers, pattern="^back_to_flowers$")],
+            PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_price), CallbackQueryHandler(post_date, pattern="^back_to_date$")],
+            WHATSAPP: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_whatsapp), CallbackQueryHandler(post_price, pattern="^back_to_price$")],
+        }, fallbacks=[CommandHandler('start', start)]
+    ))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, relay))
     app.run_polling()

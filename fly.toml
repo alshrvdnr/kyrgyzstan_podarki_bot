@@ -1,0 +1,4 @@
+app = "kyrgyzstan-podarki-bot"
+primary_region = "ams"
+
+[build]
