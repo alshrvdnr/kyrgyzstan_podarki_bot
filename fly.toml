@@ -2,3 +2,6 @@ app = "kyrgyzstan-podarki-bot"
 primary_region = "ams"
 
 [build]
+
+[processes]
+  app = "python bot.py"

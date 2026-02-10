@@ -11,7 +11,7 @@ from telegram.ext import (
 # --- 1. НАСТРОЙКИ ---
 TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k" 
 ADMIN_ID = 1615492914
-TEST_MODE = False  # ТЕПЕРЬ ОТКЛЮЧЕНО - РАБОТАЕТ В РЕАЛЬНЫЕ КАНАЛЫ
+TEST_MODE = False
 
 CHANNELS_CONFIG = {
     "bishkek": {
@@ -30,7 +30,7 @@ CHANNELS_CONFIG = {
         "categories": {"flowers": 4, "jewelry": 6, "gifts": 5, "certs": 7}
     },
 }
-EXTRA_FLOWERS_CHANNEL = -1002930228617 # Bishkek Flowers (ПЕРЕПРОДАЖА)
+EXTRA_FLOWERS_CHANNEL = -1002930228617 
 
 STRINGS = {
     'ru': {
@@ -334,7 +334,6 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer()
         u_id = ad['user_id']
         lang = db_users.get(u_id, 'ru')
-        # Сразу уведомляем
         await context.bot.send_message(u_id, STRINGS[lang]['rejected'], parse_mode='HTML')
         context.bot_data['wait_rej'] = u_id
         await query.message.delete()
@@ -360,9 +359,13 @@ async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
     u_id = update.effective_user.id
     lang = db_users.get(u_id, 'ru')
+    
+    # Исправлено: отвечаем на callback
+    if update.callback_query:
+        await update.callback_query.answer()
+    
     if active_support_chat == u_id: return
     
-    await update.callback_query.answer()
     if active_support_chat is None:
         active_support_chat = u_id
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_finish_chat'], callback_data="finish_chat")]])
@@ -370,17 +373,20 @@ async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(ADMIN_ID, f"🆘 ЧАТ: @{update.effective_user.username}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏁 ЗАВЕРШИТЬ", callback_data="finish_chat")]]))
     else:
         if u_id not in support_queue: support_queue.append(u_id)
-        await update.callback_query.message.reply_text(f"Вы в очереди: {list(support_queue).index(u_id)+1}")
+        await context.bot.send_message(u_id, f"Вы в очереди: {list(support_queue).index(u_id)+1}")
 
 async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
-    await update.callback_query.answer()
+    if update.callback_query:
+        await update.callback_query.answer()
+        
     if active_support_chat:
         try:
             l = db_users.get(active_support_chat, 'ru')
             await context.bot.send_message(active_support_chat, STRINGS[l]['chat_finished'])
             await context.bot.send_message(ADMIN_ID, "🏁 Чат закрыт.")
         except: pass
+    
     active_support_chat = None
     if support_queue:
         active_support_chat = support_queue.popleft()
@@ -403,7 +409,6 @@ async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     lang = db_users.get(update.effective_user.id, 'ru')
 
     if action == "usold":
-        # Синхронно в двух каналах
         for m_key, c_key in [('m_id', 'c_id'), ('ex_m_id', 'ex_c_id')]:
             if m_key in ad:
                 try: await context.bot.edit_message_caption(chat_id=ad[c_key], message_id=ad[m_key], caption=format_caption(ad, True), parse_mode='HTML')
@@ -426,7 +431,6 @@ async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id, text = update.effective_user.id, update.message.text
     
-    # 1. Редактирование (Синхронно)
     if 'edit_field' in context.user_data:
         field, ad_id = context.user_data['edit_field'], context.user_data['edit_ad_id']
         if ad_id in db_ads:
@@ -441,7 +445,6 @@ async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("✅ Обновлено!", reply_markup=InlineKeyboardMarkup(kb))
         return
 
-    # 2. Причина отказа
     if u_id == ADMIN_ID and context.bot_data.get('wait_rej'):
         target = context.bot_data['wait_rej']
         lang = db_users.get(target, 'ru')
@@ -450,9 +453,10 @@ async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Причина отправлена.")
         return
 
-    # 3. Чат
-    if u_id == ADMIN_ID and active_support_chat: await context.bot.send_message(active_support_chat, f"👨‍💻 {text}")
-    elif u_id == active_support_chat: await context.bot.send_message(ADMIN_ID, f"👤 {text}")
+    if u_id == ADMIN_ID and active_support_chat: 
+        await context.bot.send_message(active_support_chat, f"👨‍💻 {text}")
+    elif u_id == active_support_chat: 
+        await context.bot.send_message(ADMIN_ID, f"👤 {text}")
 
 async def field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; _, field, ad_id = query.data.split("_")
@@ -463,8 +467,12 @@ async def field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
+    
+    # 1. Простые команды
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('infa', admin_info))
+    
+    # 2. Обработка кнопок (Callback)
     app.add_handler(CallbackQueryHandler(set_lang, pattern="^sl_"))
     app.add_handler(CallbackQueryHandler(admin_decision, pattern="^apub_|^arej_|^achg_"))
     app.add_handler(CallbackQueryHandler(admin_set_category, pattern="^asetcat_"))
@@ -472,6 +480,11 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(field_select, pattern="^uf_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^to_main$"))
     
+    # ИСПРАВЛЕННЫЕ ОБРАБОТЧИКИ ПОДДЕРЖКИ
+    app.add_handler(CallbackQueryHandler(support_call, pattern="^main_support$"))
+    app.add_handler(CallbackQueryHandler(finish_chat, pattern="^finish_chat$"))
+    
+    # 3. Анкета
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(post_start, pattern="^main_post$")],
         states={
@@ -485,5 +498,8 @@ if __name__ == '__main__':
             WHATSAPP: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_whatsapp), CallbackQueryHandler(post_price, pattern="^back_to_price$")],
         }, fallbacks=[CommandHandler('start', start)]
     ))
+    
+    # 4. Сообщения (Чат и релей)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, relay))
+    
     app.run_polling()
