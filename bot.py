@@ -1,6 +1,7 @@
 import logging
 import html
 import time
+import datetime
 from collections import deque
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import (
@@ -9,9 +10,10 @@ from telegram.ext import (
 )
 
 # --- 1. НАСТРОЙКИ ---
-TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k" 
+# Обновленный токен и отключение тестового режима
+TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k"
 ADMIN_ID = 1615492914
-TEST_MODE = False
+TEST_MODE = False  # ТЕПЕРЬ ПУБЛИКАЦИЯ ИДЕТ В КАНАЛЫ
 
 # Глобальные переменные
 PAID_MODE = False
@@ -97,7 +99,10 @@ STRINGS = {
     }
 }
 
-db_ads, db_users = {}, {}
+db_ads = {}
+db_users = {} 
+db_user_dates = {} # Хранит время регистрации юзера
+
 active_support_chat = None 
 support_queue = deque()
 
@@ -126,8 +131,8 @@ async def clear_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except: pass
 
 async def finalize_ad(update, context, u_id, payment_screen_id=None):
-    # Эта функция отправляет заявку админу
     lang = db_users.get(u_id, 'ru')
+    # ID заявки - это текущее время в секундах
     ad_id = str(int(time.time()))
     
     db_ads[ad_id] = {
@@ -139,7 +144,6 @@ async def finalize_ad(update, context, u_id, payment_screen_id=None):
     
     await clear_ui(update, context)
     
-    # Модерация (Админу)
     ad = db_ads[ad_id]
     adm_cap = f"📑 <b>ЗАЯВКА</b>\n👤 @{update.effective_user.username}\n📍 {CHANNELS_CONFIG[ad['city_key']]['name']} | {STRINGS['ru']['cats'][ad['cat_key']]}\n\n{format_caption(ad)}"
     kb = InlineKeyboardMarkup([
@@ -147,13 +151,10 @@ async def finalize_ad(update, context, u_id, payment_screen_id=None):
         [InlineKeyboardButton("⚙️ КАТЕГОРИЯ", callback_data=f"achg_{ad_id}")]
     ])
     
-    # Отправка админу
     if payment_screen_id:
-        # Если есть оплата, сначала шлем скрин
         await context.bot.send_photo(ADMIN_ID, payment_screen_id, caption=f"💰 <b>ОПЛАТА ПО ЗАЯВКЕ</b>\nID: {ad_id}\nПроверьте чек 👇", parse_mode='HTML')
         
     await context.bot.send_photo(ADMIN_ID, ad['photos'][0], caption=adm_cap, reply_markup=kb, parse_mode='HTML')
-    
     await context.bot.send_message(u_id, STRINGS[lang]['wait'], parse_mode='HTML')
 
 # --- АДМИН: НАСТРОЙКА ОПЛАТЫ ---
@@ -163,23 +164,19 @@ async def cmd_nomoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global PAID_MODE, CURRENT_QR_ID
     PAID_MODE = False
     CURRENT_QR_ID = None
-    await update.message.reply_text("✅ <b>Бесплатный режим включен.</b>\nQR-код удален.", parse_mode='HTML')
+    await update.message.reply_text("✅ <b>Бесплатный режим включен.</b>", parse_mode='HTML')
 
 async def cmd_money(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    await update.message.reply_text("📸 <b>Отправьте фото НОВОГО QR-кода.</b>\n\nБот запомнит его и включит платный режим.", parse_mode='HTML')
+    await update.message.reply_text("📸 <b>Отправьте фото QR-кода.</b>", parse_mode='HTML')
     return GET_QR
 
 async def admin_get_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
-        await update.message.reply_text("❌ Это не фото. Отправьте фото QR.")
-        return GET_QR
-    
+    if not update.message.photo: return GET_QR
     global PAID_MODE, CURRENT_QR_ID
     CURRENT_QR_ID = update.message.photo[-1].file_id
     PAID_MODE = True
-    
-    await update.message.reply_text("✅ <b>Платный режим ВКЛЮЧЕН!</b>\nQR-код сохранен.", parse_mode='HTML')
+    await update.message.reply_text("✅ <b>Платный режим ВКЛЮЧЕН!</b>", parse_mode='HTML')
     return ConversationHandler.END
 
 # --- ГЛАВНЫЕ КОМАНДЫ ---
@@ -188,6 +185,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id = update.effective_user.id
     context.user_data.clear()
     
+    # Записываем время регистрации для статистики
+    if u_id not in db_user_dates:
+        db_user_dates[u_id] = time.time()
+    
+    if update.callback_query: await update.callback_query.answer()
+
     if u_id not in db_users:
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Русский 🇷🇺", callback_data="sl_ru"), 
                                     InlineKeyboardButton("Кыргызча 🇰🇬", callback_data="sl_kg")]])
@@ -202,7 +205,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(s['btn_post'], callback_data="main_post")], 
                                [InlineKeyboardButton(s['btn_support'], callback_data="main_support")]])
     if update.callback_query:
-        await update.callback_query.message.edit_text(s['welcome'], reply_markup=kb, parse_mode='HTML')
+        if update.callback_query.data == "cancel_pay":
+            try: await update.callback_query.message.delete()
+            except: pass
+            msg = await context.bot.send_message(u_id, s['welcome'], reply_markup=kb, parse_mode='HTML')
+            context.user_data['last_msg'] = msg.message_id
+        else:
+            await update.callback_query.message.edit_text(s['welcome'], reply_markup=kb, parse_mode='HTML')
     else:
         msg = await update.message.reply_text(s['welcome'], reply_markup=kb, parse_mode='HTML')
         context.user_data['last_msg'] = msg.message_id
@@ -210,12 +219,62 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    mode = "ПЛАТНЫЙ (Money)" if PAID_MODE else "БЕСПЛАТНЫЙ (NoMoney)"
-    await update.message.reply_text(f"📊 Юзеров: {len(db_users)}\nЗаявок: {len(db_ads)}\nЧат-очередь: {len(support_queue)}\n\n🛠 Режим: {mode}")
+    
+    # Определяем начало "сегодня" и "вчера"
+    now = datetime.datetime.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+    yesterday_start = today_start - 86400
+
+    # Считаем заявки
+    ads_today = 0
+    ads_yesterday = 0
+    for ad_id in db_ads:
+        try:
+            t = float(ad_id) # ad_id это timestamp
+            if t >= today_start:
+                ads_today += 1
+            elif t >= yesterday_start:
+                ads_yesterday += 1
+        except: pass
+
+    # Считаем юзеров
+    users_today = 0
+    users_yesterday = 0
+    for reg_time in db_user_dates.values():
+        if reg_time >= today_start:
+            users_today += 1
+        elif reg_time >= yesterday_start:
+            users_yesterday += 1
+
+    mode = "ПЛАТНЫЙ 💰" if PAID_MODE else "БЕСПЛАТНЫЙ 🆓"
+    
+    text = (
+        f"📊 <b>СТАТИСТИКА</b>\n\n"
+        f"📅 <b>СЕГОДНЯ:</b>\n"
+        f"👤 Новых юзеров: {users_today}\n"
+        f"📝 Заявок: {ads_today}\n\n"
+        
+        f"🗓 <b>ВЧЕРА:</b>\n"
+        f"👤 Новых юзеров: {users_yesterday}\n"
+        f"📝 Заявок: {ads_yesterday}\n\n"
+        
+        f"📈 <b>ВСЕГО:</b>\n"
+        f"👤 Юзеров: {len(db_users)}\n"
+        f"📝 Заявок: {len(db_ads)}\n\n"
+        
+        f"⚙️ <b>Статус:</b>\n"
+        f"Очередь поддержки: {len(support_queue)}\n"
+        f"Режим: {mode}"
+    )
+    
+    await update.message.reply_text(text, parse_mode='HTML')
 
 async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    db_users[query.from_user.id] = query.data.split("_")[1]
+    u_id = query.from_user.id
+    db_users[u_id] = query.data.split("_")[1]
+    if u_id not in db_user_dates:
+        db_user_dates[u_id] = time.time()
     await query.answer()
     return await start(update, context)
 
@@ -314,28 +373,37 @@ async def post_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WHATSAPP
 
 async def post_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Тут развилка: Платный или Бесплатный
     context.user_data['whatsapp'] = update.message.text
     u_id = update.effective_user.id
     lang = db_users.get(u_id, 'ru')
     await clear_ui(update, context)
 
     if PAID_MODE and CURRENT_QR_ID:
-        # ПЛАТНЫЙ РЕЖИМ
-        await context.bot.send_photo(u_id, CURRENT_QR_ID, caption=STRINGS[lang]['step_pay'], parse_mode='HTML')
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_cancel'], callback_data="cancel_pay")]])
+        msg = await context.bot.send_photo(u_id, CURRENT_QR_ID, caption=STRINGS[lang]['step_pay'], parse_mode='HTML', reply_markup=kb)
+        # Запоминаем ID сообщения с оплатой, чтобы убрать кнопку потом
+        context.user_data['pay_msg_id'] = msg.message_id
         return PAYMENT
     else:
-        # БЕСПЛАТНЫЙ РЕЖИМ
         await finalize_ad(update, context, u_id)
         return ConversationHandler.END
 
 async def post_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Пришел скрин оплаты
     if not update.message.photo:
         lang = db_users.get(update.effective_user.id, 'ru')
         await update.message.reply_text("Пожалуйста, отправьте фото (скриншот)!" if lang=='ru' else "Сураныч, сүрөт жөнөтүңүз!")
         return PAYMENT
     
+    # Убираем кнопку отмены с сообщения QR кода
+    if 'pay_msg_id' in context.user_data:
+        try:
+            await context.bot.edit_message_reply_markup(
+                chat_id=update.effective_chat.id, 
+                message_id=context.user_data['pay_msg_id'], 
+                reply_markup=None
+            )
+        except: pass
+
     screen_id = update.message.photo[-1].file_id
     await finalize_ad(update, context, update.effective_user.id, payment_screen_id=screen_id)
     return ConversationHandler.END
@@ -356,8 +424,6 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cap = format_caption(ad)
         
         try:
-            # 1. Основной канал (ПУБЛИКУЕМ ТОЛЬКО ФОТО ТОВАРА, НЕ СКРИН ОПЛАТЫ)
-            # ad['photos'] содержит только товары
             if len(ad['photos']) == 1:
                 msg = await context.bot.send_photo(target, ad['photos'][0], caption=cap, parse_mode='HTML', message_thread_id=thread)
             else:
@@ -367,7 +433,6 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg = msgs[0]
             db_ads[ad_id].update({'m_id': msg.message_id, 'c_id': target})
 
-            # 2. Доп канал (Цветы Бишкек)
             if ad['city_key'] == "bishkek" and ad['cat_key'] == "flowers":
                 ex_target = ADMIN_ID if TEST_MODE else EXTRA_FLOWERS_CHANNEL
                 try:
@@ -423,9 +488,14 @@ async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_support_chat = u_id
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_finish_chat'], callback_data="finish_chat")]])
         await context.bot.send_message(u_id, STRINGS[lang]['support_open'], reply_markup=kb, parse_mode='HTML')
-        await context.bot.send_message(ADMIN_ID, f"🆘 ЧАТ: @{update.effective_user.username}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏁 ЗАВЕРШИТЬ", callback_data="finish_chat")]]))
+        
+        q_len = len(support_queue)
+        q_text = f"\n👥 В очереди: {q_len}" if q_len > 0 else ""
+        await context.bot.send_message(ADMIN_ID, f"🆘 ЧАТ: @{update.effective_user.username}{q_text}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏁 ЗАВЕРШИТЬ", callback_data="finish_chat")]]))
     else:
-        if u_id not in support_queue: support_queue.append(u_id)
+        if u_id not in support_queue: 
+            support_queue.append(u_id)
+            await context.bot.send_message(ADMIN_ID, f"🆕 Новый человек в очереди! Всего ждут: {len(support_queue)}")
         await context.bot.send_message(u_id, f"Вы в очереди: {list(support_queue).index(u_id)+1}")
 
 async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -443,6 +513,7 @@ async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         l = db_users.get(active_support_chat, 'ru')
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[l]['btn_finish_chat'], callback_data="finish_chat")]])
         await context.bot.send_message(active_support_chat, STRINGS[l]['support_open'], reply_markup=kb, parse_mode='HTML')
+        await context.bot.send_message(ADMIN_ID, f"🆘 Следующий чат! (Осталось в очереди: {len(support_queue)})", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏁 ЗАВЕРШИТЬ", callback_data="finish_chat")]]))
     else:
         if update.effective_user.id == ADMIN_ID:
             try: await update.callback_query.message.edit_text("🏁 Все чаты закрыты.")
@@ -502,8 +573,10 @@ async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if u_id == ADMIN_ID and active_support_chat: 
         await context.bot.send_message(active_support_chat, f"👨‍💻 {text}")
-    elif u_id == active_support_chat: 
-        await context.bot.send_message(ADMIN_ID, f"👤 {text}")
+    elif u_id == active_support_chat:
+        q_len = len(support_queue)
+        info = f" [Очередь: {q_len}]" if q_len > 0 else ""
+        await context.bot.send_message(ADMIN_ID, f"👤 {text}{info}")
 
 async def field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query; _, field, ad_id = query.data.split("_")
@@ -519,7 +592,6 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler('infa', admin_info))
     app.add_handler(CommandHandler('nomoney', cmd_nomoney))
     
-    # Конверсейшн для настройки QR админом
     app.add_handler(ConversationHandler(
         entry_points=[CommandHandler('money', cmd_money)],
         states={GET_QR: [MessageHandler(filters.PHOTO, admin_get_qr)]},
@@ -546,7 +618,10 @@ if __name__ == '__main__':
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_date), CallbackQueryHandler(post_flowers, pattern="^back_to_flowers$")],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_price), CallbackQueryHandler(post_date, pattern="^back_to_date$")],
             WHATSAPP: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_whatsapp), CallbackQueryHandler(post_price, pattern="^back_to_price$")],
-            PAYMENT: [MessageHandler(filters.PHOTO, post_payment)]
+            PAYMENT: [
+                MessageHandler(filters.PHOTO, post_payment),
+                CallbackQueryHandler(start, pattern="^cancel_pay$")
+            ]
         }, fallbacks=[CommandHandler('start', start)]
     ))
     
