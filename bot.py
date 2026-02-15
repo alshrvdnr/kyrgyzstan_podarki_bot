@@ -10,7 +10,7 @@ from telegram.ext import (
 )
 
 # --- 1. НАСТРОЙКИ ---
-# Обновленный токен и отключение тестового режима
+# Оригинальный токен и PUBLICATION MODE (TEST_MODE = False)
 TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k"
 ADMIN_ID = 1615492914
 TEST_MODE = False  # ТЕПЕРЬ ПУБЛИКАЦИЯ ИДЕТ В КАНАЛЫ
@@ -56,7 +56,7 @@ STRINGS = {
         'step_7': "<b>💰 ШАГ 7: ЦЕНА</b>\nВведите цену в сомах:",
         'step_8': "<b>📱 ШАГ 8: WHATSAPP</b>\nВведите номер телефона:",
         'step_pay': "<b>💳 ОПЛАТА</b>\nИз-за праздников публикация платная — <b>100 сом</b>.\n\nПожалуйста, оплатите по QR-коду выше 👆 и <b>отправьте скриншот чека</b> сюда.",
-        'wait': "✅ <b>Принято!</b> Ваша заявка отправлена модератору.",
+        'wait': "✅ <b>Принято!</b> Ваша заявка и чек отправлены на проверку. Как только модератор освободится, он примет её или ответит вам.",
         'rejected': "❌ <b>Заявка отклонена.</b>",
         'reason_prefix': "📝 <b>Причина:</b> ",
         'support_open': "🤝 <b>ЧАТ ОТКРЫТ</b>\nПишите сообщение. Модератор ответит здесь.",
@@ -66,6 +66,8 @@ STRINGS = {
         'field_price': "💰 Цена",
         'field_address': "📍 Адрес",
         'field_whatsapp': "📞 WhatsApp",
+        'sold_warn': "⚠️ <b>ВЫ УВЕРЕНЫ?</b>\n\nПосле отметки «Продано» пост будет изменен, и вы больше не сможете его редактировать или продвигать.",
+        'btn_confirm_sold': "✅ Да, продано",
         'cats': {"flowers": "Цветы 🌸", "jewelry": "Ювелирка 💎", "gifts": "Подарки 🎁", "certs": "Сертификаты 🎟"}
     },
     'kg': {
@@ -85,7 +87,7 @@ STRINGS = {
         'step_7': "<b>💰 7-КАДАМ: БААСЫ</b>\nБаасын жазыңыз:",
         'step_8': "<b>📱 8-КАДАМ: WHATSAPP</b>\nТелефон номериңиз:",
         'step_pay': "<b>💳 ТӨЛӨӨ</b>\nМайрамдарга байланыштуу жарыя чыгаруу акылуу — <b>100 сом</b>.\n\nQR-код менен төлөп 👆, <b>чектин сүрөтүн (скриншот)</b> жөнөтүңүз.",
-        'wait': "✅ <b>Кабыл алынды!</b> Текшерүүгө жөнөтүлдү.",
+        'wait': "✅ <b>Кабыл алынды!</b> Сиздин билдирүүңүз жана чегиңиз текшерүүгө жөнөтүлдү. Модератор бошогондо аны кабыл алат же сизге жооп берет.",
         'rejected': "❌ <b>Жарыя четке кагылды.</b>",
         'reason_prefix': "📝 <b>Себеби:</b> ",
         'support_open': "🤝 <b>ЧАТ АЧЫЛДЫ</b>\nЖазыңыз, модератор жооп берет.",
@@ -95,6 +97,8 @@ STRINGS = {
         'field_price': "💰 Баасы",
         'field_address': "📍 Дарек",
         'field_whatsapp': "📞 WhatsApp",
+        'sold_warn': "⚠️ <b>ИШЕНЕСИЗБИ?</b>\n\n«Сатылды» деп белгиленгенден кийин билдирүү өзгөрөт и сиз аны кайра өзгөртө албайсыз.",
+        'btn_confirm_sold': "✅ Ооба, сатылды",
         'cats': {"flowers": "Гүлдөр 🌸", "jewelry": "Зергер буюмдар 💎", "gifts": "Белектер 🎁", "certs": "Сертификаттар 🎟"}
     }
 }
@@ -128,6 +132,13 @@ async def clear_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'last_msg' in context.user_data:
         try:
             await context.bot.delete_message(update.effective_chat.id, context.user_data['last_msg'])
+        except: pass
+    
+    # Также удаляем сообщение с оплатой (QR-кодом), если оно было
+    if 'pay_msg_id' in context.user_data:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, context.user_data['pay_msg_id'])
+            del context.user_data['pay_msg_id']
         except: pass
 
 async def finalize_ad(update, context, u_id, payment_screen_id=None):
@@ -519,7 +530,7 @@ async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try: await update.callback_query.message.edit_text("🏁 Все чаты закрыты.")
             except: pass
 
-# --- ИЗМЕНЕНИЕ ---
+# --- ИЗМЕНЕНИЕ И УПРАВЛЕНИЕ ---
 
 async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -528,16 +539,25 @@ async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ad = db_ads.get(ad_id)
     if not ad: return
     lang = db_users.get(update.effective_user.id, 'ru')
+    s = STRINGS[lang]
 
     if action == "usold":
+        # Шаг 1: Подтверждение
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(s['btn_confirm_sold'], callback_data=f"uconf_{ad_id}")],
+            [InlineKeyboardButton(s['btn_back'], callback_data=f"uback_{ad_id}")]
+        ])
+        await query.edit_message_text(s['sold_warn'], reply_markup=kb, parse_mode='HTML')
+
+    elif action == "uconf":
+        # Шаг 2: Само действие «Продано»
         for m_key, c_key in [('m_id', 'c_id'), ('ex_m_id', 'ex_c_id')]:
             if m_key in ad:
                 try: await context.bot.edit_message_caption(chat_id=ad[c_key], message_id=ad[m_key], caption=format_caption(ad, True), parse_mode='HTML')
                 except: pass
-        await query.edit_message_text("✅ ТОВАР ПРОДАН")
+        await query.edit_message_text("✅ ТОВАР ПРОДАН / ТОВАР САТЫЛДЫ")
 
     elif action == "uedit":
-        s = STRINGS[lang]
         kb = [[InlineKeyboardButton(s['field_flowers'], callback_data=f"uf_flowers_{ad_id}"), InlineKeyboardButton(s['field_price'], callback_data=f"uf_price_{ad_id}")],
               [InlineKeyboardButton(s['field_address'], callback_data=f"uf_address_{ad_id}"), InlineKeyboardButton(s['field_whatsapp'], callback_data=f"uf_whatsapp_{ad_id}")],
               [InlineKeyboardButton(s['btn_back'], callback_data=f"uback_{ad_id}")]]
@@ -545,7 +565,7 @@ async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "uback":
         kb = [[InlineKeyboardButton("📝 Изменить", callback_data=f"uedit_{ad_id}"), InlineKeyboardButton("✅ Продано", callback_data=f"usold_{ad_id}")]]
-        await query.edit_message_text("Меню управления:", reply_markup=InlineKeyboardMarkup(kb))
+        await query.edit_message_text("Меню управления / Башкаруу менюсу:", reply_markup=InlineKeyboardMarkup(kb))
 
 # --- РЕЛЕЙ ---
 
@@ -601,7 +621,7 @@ if __name__ == '__main__':
     app.add_handler(CallbackQueryHandler(set_lang, pattern="^sl_"))
     app.add_handler(CallbackQueryHandler(admin_decision, pattern="^apub_|^arej_|^achg_"))
     app.add_handler(CallbackQueryHandler(admin_set_category, pattern="^asetcat_"))
-    app.add_handler(CallbackQueryHandler(user_actions, pattern="^usold_|^uedit_|^uback_"))
+    app.add_handler(CallbackQueryHandler(user_actions, pattern="^usold_|^uedit_|^uback_|^uconf_"))
     app.add_handler(CallbackQueryHandler(field_select, pattern="^uf_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^to_main$"))
     app.add_handler(CallbackQueryHandler(support_call, pattern="^main_support$"))
