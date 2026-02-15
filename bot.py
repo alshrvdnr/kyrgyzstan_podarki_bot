@@ -13,6 +13,10 @@ TOKEN = "8399814024:AAEla8xBVk_9deHydJV0hrc5QYDyXAFpZ8k"
 ADMIN_ID = 1615492914
 TEST_MODE = False
 
+# Глобальные переменные
+PAID_MODE = False
+CURRENT_QR_ID = None # Хранит ID текущего QR кода
+
 CHANNELS_CONFIG = {
     "bishkek": {
         "name": "Бишкек", 
@@ -49,6 +53,7 @@ STRINGS = {
         'step_6': "<b>🕒 ШАГ 6: ВРЕМЯ</b>\nУкажите время работы или доставки:",
         'step_7': "<b>💰 ШАГ 7: ЦЕНА</b>\nВведите цену в сомах:",
         'step_8': "<b>📱 ШАГ 8: WHATSAPP</b>\nВведите номер телефона:",
+        'step_pay': "<b>💳 ОПЛАТА</b>\nИз-за праздников публикация платная — <b>100 сом</b>.\n\nПожалуйста, оплатите по QR-коду выше 👆 и <b>отправьте скриншот чека</b> сюда.",
         'wait': "✅ <b>Принято!</b> Ваша заявка отправлена модератору.",
         'rejected': "❌ <b>Заявка отклонена.</b>",
         'reason_prefix': "📝 <b>Причина:</b> ",
@@ -77,6 +82,7 @@ STRINGS = {
         'step_6': "<b>🕒 6-КАДАМ: УБАКЫТ</b>\nУбакытты жазыңыз:",
         'step_7': "<b>💰 7-КАДАМ: БААСЫ</b>\nБаасын жазыңыз:",
         'step_8': "<b>📱 8-КАДАМ: WHATSAPP</b>\nТелефон номериңиз:",
+        'step_pay': "<b>💳 ТӨЛӨӨ</b>\nМайрамдарга байланыштуу жарыя чыгаруу акылуу — <b>100 сом</b>.\n\nQR-код менен төлөп 👆, <b>чектин сүрөтүн (скриншот)</b> жөнөтүңүз.",
         'wait': "✅ <b>Кабыл алынды!</b> Текшерүүгө жөнөтүлдү.",
         'rejected': "❌ <b>Жарыя четке кагылды.</b>",
         'reason_prefix': "📝 <b>Себеби:</b> ",
@@ -95,7 +101,9 @@ db_ads, db_users = {}, {}
 active_support_chat = None 
 support_queue = deque()
 
-PHOTO, CITY, ADDRESS, CATEGORY, FLOWERS, DATE, PRICE, WHATSAPP = range(8)
+# Состояния: PAYMENT - ожидание скрина оплаты, GET_QR - ожидание QR от админа
+PHOTO, CITY, ADDRESS, CATEGORY, FLOWERS, DATE, PRICE, WHATSAPP, PAYMENT = range(9)
+GET_QR = 10 
 
 logging.basicConfig(level=logging.INFO)
 
@@ -115,8 +123,64 @@ async def clear_ui(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'last_msg' in context.user_data:
         try:
             await context.bot.delete_message(update.effective_chat.id, context.user_data['last_msg'])
-        except:
-            pass
+        except: pass
+
+async def finalize_ad(update, context, u_id, payment_screen_id=None):
+    # Эта функция отправляет заявку админу
+    lang = db_users.get(u_id, 'ru')
+    ad_id = str(int(time.time()))
+    
+    db_ads[ad_id] = {
+        'user_id': u_id, 'city_key': context.user_data['city_key'], 'cat_key': context.user_data['cat_key'],
+        'flowers': context.user_data['flowers'], 'price': context.user_data['price'], 'date': context.user_data['date'],
+        'address': context.user_data['address'], 'whatsapp': context.user_data['whatsapp'], 'photos': context.user_data['photos'],
+        'payment_screen': payment_screen_id
+    }
+    
+    await clear_ui(update, context)
+    
+    # Модерация (Админу)
+    ad = db_ads[ad_id]
+    adm_cap = f"📑 <b>ЗАЯВКА</b>\n👤 @{update.effective_user.username}\n📍 {CHANNELS_CONFIG[ad['city_key']]['name']} | {STRINGS['ru']['cats'][ad['cat_key']]}\n\n{format_caption(ad)}"
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ОДОБРИТЬ ✅", callback_data=f"apub_{ad_id}"), InlineKeyboardButton("ОТКЛОНИТЬ ❌", callback_data=f"arej_{ad_id}")],
+        [InlineKeyboardButton("⚙️ КАТЕГОРИЯ", callback_data=f"achg_{ad_id}")]
+    ])
+    
+    # Отправка админу
+    if payment_screen_id:
+        # Если есть оплата, сначала шлем скрин
+        await context.bot.send_photo(ADMIN_ID, payment_screen_id, caption=f"💰 <b>ОПЛАТА ПО ЗАЯВКЕ</b>\nID: {ad_id}\nПроверьте чек 👇", parse_mode='HTML')
+        
+    await context.bot.send_photo(ADMIN_ID, ad['photos'][0], caption=adm_cap, reply_markup=kb, parse_mode='HTML')
+    
+    await context.bot.send_message(u_id, STRINGS[lang]['wait'], parse_mode='HTML')
+
+# --- АДМИН: НАСТРОЙКА ОПЛАТЫ ---
+
+async def cmd_nomoney(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    global PAID_MODE, CURRENT_QR_ID
+    PAID_MODE = False
+    CURRENT_QR_ID = None
+    await update.message.reply_text("✅ <b>Бесплатный режим включен.</b>\nQR-код удален.", parse_mode='HTML')
+
+async def cmd_money(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID: return
+    await update.message.reply_text("📸 <b>Отправьте фото НОВОГО QR-кода.</b>\n\nБот запомнит его и включит платный режим.", parse_mode='HTML')
+    return GET_QR
+
+async def admin_get_qr(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.photo:
+        await update.message.reply_text("❌ Это не фото. Отправьте фото QR.")
+        return GET_QR
+    
+    global PAID_MODE, CURRENT_QR_ID
+    CURRENT_QR_ID = update.message.photo[-1].file_id
+    PAID_MODE = True
+    
+    await update.message.reply_text("✅ <b>Платный режим ВКЛЮЧЕН!</b>\nQR-код сохранен.", parse_mode='HTML')
+    return ConversationHandler.END
 
 # --- ГЛАВНЫЕ КОМАНДЫ ---
 
@@ -146,7 +210,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID: return
-    await update.message.reply_text(f"📊 Юзеров: {len(db_users)}\nЗаявок: {len(db_ads)}\nЧат-очередь: {len(support_queue)}")
+    mode = "ПЛАТНЫЙ (Money)" if PAID_MODE else "БЕСПЛАТНЫЙ (NoMoney)"
+    await update.message.reply_text(f"📊 Юзеров: {len(db_users)}\nЗаявок: {len(db_ads)}\nЧат-очередь: {len(support_queue)}\n\n🛠 Режим: {mode}")
 
 async def set_lang(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -163,7 +228,6 @@ async def post_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['photos'] = []
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_done'], callback_data="photos_done")],
                                [InlineKeyboardButton(STRINGS[lang]['btn_cancel'], callback_data="to_main")]])
-    
     if query:
         await query.message.edit_text(STRINGS[lang]['step_1'], reply_markup=kb, parse_mode='HTML')
         context.user_data['last_msg'] = query.message.message_id
@@ -179,7 +243,6 @@ async def post_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.user_data.get('photos'):
         await update.callback_query.answer("Загрузите фото!", show_alert=True)
         return PHOTO
-    
     await clear_ui(update, context)
     kb = [[InlineKeyboardButton(v['name'], callback_data=f"city_{k}")] for k, v in CHANNELS_CONFIG.items()]
     kb.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_photo_start")])
@@ -190,10 +253,8 @@ async def post_photos_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_city(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     lang = db_users.get(query.from_user.id, 'ru')
-    if query.data.startswith("city_"):
-        context.user_data['city_key'] = query.data.replace("city_", "")
+    if query.data.startswith("city_"): context.user_data['city_key'] = query.data.replace("city_", "")
     await query.answer()
-    
     await clear_ui(update, context)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="photos_done")]])
     msg = await query.message.reply_text(STRINGS[lang]['step_3'], reply_markup=kb, parse_mode='HTML')
@@ -204,7 +265,6 @@ async def post_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         context.user_data['address'] = update.message.text
         await clear_ui(update, context)
-    
     lang = db_users.get(update.effective_user.id, 'ru')
     kb = [[InlineKeyboardButton(v, callback_data=f"cat_{k}")] for k, v in STRINGS[lang]['cats'].items()]
     kb.append([InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_city")])
@@ -215,10 +275,8 @@ async def post_address(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     lang = db_users.get(query.from_user.id, 'ru')
-    if query.data.startswith("cat_"):
-        context.user_data['cat_key'] = query.data.replace("cat_", "")
+    if query.data.startswith("cat_"): context.user_data['cat_key'] = query.data.replace("cat_", "")
     await query.answer()
-    
     await clear_ui(update, context)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_addr")]])
     msg = await query.message.reply_text(STRINGS[lang]['step_5'], reply_markup=kb, parse_mode='HTML')
@@ -229,7 +287,6 @@ async def post_flowers(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         context.user_data['flowers'] = update.message.text
         await clear_ui(update, context)
-    
     lang = db_users.get(update.effective_user.id, 'ru')
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_cat")]])
     msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_6'], reply_markup=kb, parse_mode='HTML')
@@ -240,7 +297,6 @@ async def post_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         context.user_data['date'] = update.message.text
         await clear_ui(update, context)
-        
     lang = db_users.get(update.effective_user.id, 'ru')
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_flowers")]])
     msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_7'], reply_markup=kb, parse_mode='HTML')
@@ -251,7 +307,6 @@ async def post_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         context.user_data['price'] = update.message.text
         await clear_ui(update, context)
-        
     lang = db_users.get(update.effective_user.id, 'ru')
     kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_back'], callback_data="back_to_date")]])
     msg = await context.bot.send_message(update.effective_chat.id, STRINGS[lang]['step_8'], reply_markup=kb, parse_mode='HTML')
@@ -259,32 +314,33 @@ async def post_price(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return WHATSAPP
 
 async def post_whatsapp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Тут развилка: Платный или Бесплатный
     context.user_data['whatsapp'] = update.message.text
     u_id = update.effective_user.id
     lang = db_users.get(u_id, 'ru')
-    ad_id = str(int(time.time()))
-    
-    db_ads[ad_id] = {
-        'user_id': u_id, 'city_key': context.user_data['city_key'], 'cat_key': context.user_data['cat_key'],
-        'flowers': context.user_data['flowers'], 'price': context.user_data['price'], 'date': context.user_data['date'],
-        'address': context.user_data['address'], 'whatsapp': context.user_data['whatsapp'], 'photos': context.user_data['photos']
-    }
-    
     await clear_ui(update, context)
+
+    if PAID_MODE and CURRENT_QR_ID:
+        # ПЛАТНЫЙ РЕЖИМ
+        await context.bot.send_photo(u_id, CURRENT_QR_ID, caption=STRINGS[lang]['step_pay'], parse_mode='HTML')
+        return PAYMENT
+    else:
+        # БЕСПЛАТНЫЙ РЕЖИМ
+        await finalize_ad(update, context, u_id)
+        return ConversationHandler.END
+
+async def post_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Пришел скрин оплаты
+    if not update.message.photo:
+        lang = db_users.get(update.effective_user.id, 'ru')
+        await update.message.reply_text("Пожалуйста, отправьте фото (скриншот)!" if lang=='ru' else "Сураныч, сүрөт жөнөтүңүз!")
+        return PAYMENT
     
-    # Модерация (Админу)
-    ad = db_ads[ad_id]
-    adm_cap = f"📑 <b>ЗАЯВКА</b>\n👤 @{update.effective_user.username}\n📍 {CHANNELS_CONFIG[ad['city_key']]['name']} | {STRINGS['ru']['cats'][ad['cat_key']]}\n\n{format_caption(ad)}"
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("ОДОБРИТЬ ✅", callback_data=f"apub_{ad_id}"), InlineKeyboardButton("ОТКЛОНИТЬ ❌", callback_data=f"arej_{ad_id}")],
-        [InlineKeyboardButton("⚙️ КАТЕГОРИЯ", callback_data=f"achg_{ad_id}")]
-    ])
-    await context.bot.send_photo(ADMIN_ID, ad['photos'][0], caption=adm_cap, reply_markup=kb, parse_mode='HTML')
-    
-    await update.message.reply_text(STRINGS[lang]['wait'], parse_mode='HTML')
+    screen_id = update.message.photo[-1].file_id
+    await finalize_ad(update, context, update.effective_user.id, payment_screen_id=screen_id)
     return ConversationHandler.END
 
-# --- АДМИН ---
+# --- АДМИН ПУБЛИКАЦИЯ ---
 
 async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -300,7 +356,8 @@ async def admin_decision(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cap = format_caption(ad)
         
         try:
-            # 1. Основной канал
+            # 1. Основной канал (ПУБЛИКУЕМ ТОЛЬКО ФОТО ТОВАРА, НЕ СКРИН ОПЛАТЫ)
+            # ad['photos'] содержит только товары
             if len(ad['photos']) == 1:
                 msg = await context.bot.send_photo(target, ad['photos'][0], caption=cap, parse_mode='HTML', message_thread_id=thread)
             else:
@@ -359,13 +416,9 @@ async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
     u_id = update.effective_user.id
     lang = db_users.get(u_id, 'ru')
-    
-    # Исправлено: отвечаем на callback
-    if update.callback_query:
-        await update.callback_query.answer()
+    if update.callback_query: await update.callback_query.answer()
     
     if active_support_chat == u_id: return
-    
     if active_support_chat is None:
         active_support_chat = u_id
         kb = InlineKeyboardMarkup([[InlineKeyboardButton(STRINGS[lang]['btn_finish_chat'], callback_data="finish_chat")]])
@@ -377,16 +430,13 @@ async def support_call(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def finish_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global active_support_chat
-    if update.callback_query:
-        await update.callback_query.answer()
-        
+    if update.callback_query: await update.callback_query.answer()
     if active_support_chat:
         try:
             l = db_users.get(active_support_chat, 'ru')
             await context.bot.send_message(active_support_chat, STRINGS[l]['chat_finished'])
             await context.bot.send_message(ADMIN_ID, "🏁 Чат закрыт.")
         except: pass
-    
     active_support_chat = None
     if support_queue:
         active_support_chat = support_queue.popleft()
@@ -430,7 +480,6 @@ async def user_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u_id, text = update.effective_user.id, update.message.text
-    
     if 'edit_field' in context.user_data:
         field, ad_id = context.user_data['edit_field'], context.user_data['edit_ad_id']
         if ad_id in db_ads:
@@ -444,7 +493,6 @@ async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = [[InlineKeyboardButton("📝 Изменить еще", callback_data=f"uedit_{ad_id}"), InlineKeyboardButton("✅ Продано", callback_data=f"usold_{ad_id}")]]
             await update.message.reply_text("✅ Обновлено!", reply_markup=InlineKeyboardMarkup(kb))
         return
-
     if u_id == ADMIN_ID and context.bot_data.get('wait_rej'):
         target = context.bot_data['wait_rej']
         lang = db_users.get(target, 'ru')
@@ -452,7 +500,6 @@ async def relay(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.bot_data['wait_rej'] = None
         await update.message.reply_text("Причина отправлена.")
         return
-
     if u_id == ADMIN_ID and active_support_chat: 
         await context.bot.send_message(active_support_chat, f"👨‍💻 {text}")
     elif u_id == active_support_chat: 
@@ -468,23 +515,26 @@ async def field_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == '__main__':
     app = ApplicationBuilder().token(TOKEN).build()
     
-    # 1. Простые команды
     app.add_handler(CommandHandler('start', start))
     app.add_handler(CommandHandler('infa', admin_info))
+    app.add_handler(CommandHandler('nomoney', cmd_nomoney))
     
-    # 2. Обработка кнопок (Callback)
+    # Конверсейшн для настройки QR админом
+    app.add_handler(ConversationHandler(
+        entry_points=[CommandHandler('money', cmd_money)],
+        states={GET_QR: [MessageHandler(filters.PHOTO, admin_get_qr)]},
+        fallbacks=[]
+    ))
+    
     app.add_handler(CallbackQueryHandler(set_lang, pattern="^sl_"))
     app.add_handler(CallbackQueryHandler(admin_decision, pattern="^apub_|^arej_|^achg_"))
     app.add_handler(CallbackQueryHandler(admin_set_category, pattern="^asetcat_"))
     app.add_handler(CallbackQueryHandler(user_actions, pattern="^usold_|^uedit_|^uback_"))
     app.add_handler(CallbackQueryHandler(field_select, pattern="^uf_"))
     app.add_handler(CallbackQueryHandler(start, pattern="^to_main$"))
-    
-    # ИСПРАВЛЕННЫЕ ОБРАБОТЧИКИ ПОДДЕРЖКИ
     app.add_handler(CallbackQueryHandler(support_call, pattern="^main_support$"))
     app.add_handler(CallbackQueryHandler(finish_chat, pattern="^finish_chat$"))
     
-    # 3. Анкета
     app.add_handler(ConversationHandler(
         entry_points=[CallbackQueryHandler(post_start, pattern="^main_post$")],
         states={
@@ -496,10 +546,10 @@ if __name__ == '__main__':
             DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_date), CallbackQueryHandler(post_flowers, pattern="^back_to_flowers$")],
             PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_price), CallbackQueryHandler(post_date, pattern="^back_to_date$")],
             WHATSAPP: [MessageHandler(filters.TEXT & ~filters.COMMAND, post_whatsapp), CallbackQueryHandler(post_price, pattern="^back_to_price$")],
+            PAYMENT: [MessageHandler(filters.PHOTO, post_payment)]
         }, fallbacks=[CommandHandler('start', start)]
     ))
     
-    # 4. Сообщения (Чат и релей)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, relay))
     
     app.run_polling()
